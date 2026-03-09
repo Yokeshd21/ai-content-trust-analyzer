@@ -21,7 +21,9 @@ import {
   ArrowRight,
   CheckCircle2,
   AlertCircle,
-  Info
+  Info,
+  Sparkles,
+  Loader2
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -109,10 +111,6 @@ const TopNav = () => {
         </button>
         <div className="h-8 w-[1px] bg-white/10 mx-2"></div>
         <div className="flex items-center gap-3 pl-2">
-          <div className="text-right hidden sm:block">
-            <p className="text-sm font-medium">Hackathon Mode</p>
-            <p className="text-xs text-zinc-500">Prototype Active</p>
-          </div>
           <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 p-[1px]">
             <div className="w-full h-full rounded-full bg-zinc-900 flex items-center justify-center overflow-hidden">
               <User className="w-5 h-5 text-zinc-400" />
@@ -343,12 +341,14 @@ const AnalyzeView = ({ onSaveToHistory, settings }: any) => {
       let contents: any;
 
       if (activeType === 'text') {
-        contents = `Analyze the following text for trustworthiness and AI generation. 
-             ${settings.deepScan ? 'Perform an extremely deep linguistic analysis, looking for subtle semantic inconsistencies and structural patterns typical of large language models.' : 'Identify specific linguistic markers or factual inconsistencies.'}
+        contents = `You are an expert fact-checker and AI forensic analyst. Analyze the following text for trustworthiness, factual accuracy, and AI generation.
+             ${settings.deepScan ? 'Perform an extremely deep, sentence-by-sentence linguistic analysis. Look for subtle semantic inconsistencies, repetitive structural patterns typical of LLMs, and verify the logical consistency of all claims.' : 'Identify specific linguistic markers of AI generation and check for factual inconsistencies.'}
+             Provide a highly detailed, accurate, and professional analysis explaining exactly why you assigned the trust score and AI probability. Cite specific phrases from the text as evidence.
              Text: "${textInput}"`;
       } else if (activeType === 'url') {
-        contents = `Analyze the content of the following URL for trustworthiness and AI generation. 
+        contents = `You are an expert fact-checker and AI forensic analyst. Analyze the content of the following URL for trustworthiness, factual accuracy, and AI generation.
              ${settings.deepScan ? 'Perform an extremely deep linguistic analysis, looking for subtle semantic inconsistencies and structural patterns typical of large language models.' : 'Identify specific linguistic markers or factual inconsistencies.'}
+             Provide a highly detailed, accurate, and professional analysis explaining exactly why you assigned the trust score and AI probability. If the URL is inaccessible, analyze the URL structure itself for phishing/scam indicators.
              URL: "${urlInput}"`;
       } else if (activeType === 'image') {
         if (!preview) throw new Error("No image preview available");
@@ -364,8 +364,9 @@ const AnalyzeView = ({ onSaveToHistory, settings }: any) => {
               }
             },
             {
-              text: `Analyze this image for trustworthiness, authenticity, and AI generation. 
-              ${settings.deepScan ? 'Perform an extremely deep forensic analysis, looking for subtle artifacts, unnatural lighting, structural anomalies, asymmetric details, and signs of diffusion models or GANs.' : 'Identify if this image appears to be AI-generated or manipulated.'}
+              text: `You are an expert digital forensics analyst. Analyze this image for trustworthiness, authenticity, and AI generation. 
+              ${settings.deepScan ? 'Perform an extremely deep forensic analysis. Look for subtle artifacts, unnatural lighting, structural anomalies, asymmetric details (e.g., in eyes, hands, background patterns), and signs of diffusion models or GANs.' : 'Identify if this image appears to be AI-generated or manipulated.'}
+              Provide a highly detailed, accurate, and professional analysis explaining exactly why you assigned the trust score and AI probability. Point out specific areas of the image that look suspicious or authentic.
               Provide the response in the requested JSON format.`
             }
           ]
@@ -394,10 +395,11 @@ const AnalyzeView = ({ onSaveToHistory, settings }: any) => {
                   }
                 }
               },
-              explanation: { type: Type.STRING, description: "Detailed explanation of the analysis and key differences found" }
+              explanation: { type: Type.STRING, description: "A highly detailed, comprehensive, and accurate forensic analysis explaining the reasoning behind the trust score and AI probability. Include specific examples, linguistic markers, or visual artifacts found." }
             },
             required: ["trust_score", "ai_probability", "claims", "explanation"]
-          }
+          },
+          tools: activeType !== 'image' ? [{ googleSearch: {} }] : undefined
         }
       });
 
@@ -778,6 +780,9 @@ const SettingsView = ({ settings, setSettings }: any) => {
 }
 
 const Insights = ({ history }: { history: any[] }) => {
+  const [aiInsight, setAiInsight] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+
   if (history.length === 0) return null;
 
   const avgTrust = history.reduce((acc, item) => acc + item.trust_score, 0) / history.length;
@@ -785,31 +790,82 @@ const Insights = ({ history }: { history: any[] }) => {
   const totalClaims = history.reduce((acc, item) => acc + (item.claims?.length || 0), 0);
   const falseClaims = history.reduce((acc, item) => acc + (item.claims?.filter((c: any) => c.status === 'false').length || 0), 0);
 
+  const generateInsight = async () => {
+    setIsGenerating(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
+      const prompt = `Analyze the following user history of fact-checking and AI detection. 
+      Provide a short, 2-3 sentence personalized insight about their verification habits, the types of content they check, and their overall exposure to misinformation or AI content.
+      History data: ${JSON.stringify(history.map(h => ({ type: h.type, trust_score: h.trust_score, ai_probability: h.ai_probability, false_claims: h.claims?.filter((c:any) => c.status === 'false').length })))}
+      `;
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+      });
+      setAiInsight(response.text || "Unable to generate insights at this time.");
+    } catch (error) {
+      console.error(error);
+      setAiInsight("Unable to generate insights at this time.");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-      <div className="glass-card p-6 border-indigo-500/20">
-        <div className="flex items-center gap-3 mb-2">
-          <ShieldCheck className="w-5 h-5 text-indigo-400" />
-          <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Avg. Trust Score</p>
+    <div className="space-y-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="glass-card p-6 border-indigo-500/20">
+          <div className="flex items-center gap-3 mb-2">
+            <ShieldCheck className="w-5 h-5 text-indigo-400" />
+            <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Avg. Trust Score</p>
+          </div>
+          <p className="text-3xl font-display font-bold text-white">{Math.round(avgTrust)}%</p>
+          <p className="text-xs text-zinc-500 mt-1">Based on {history.length} analyses</p>
         </div>
-        <p className="text-3xl font-display font-bold text-white">{Math.round(avgTrust)}%</p>
-        <p className="text-xs text-zinc-500 mt-1">Based on {history.length} analyses</p>
+        <div className="glass-card p-6 border-purple-500/20">
+          <div className="flex items-center gap-3 mb-2">
+            <Zap className="w-5 h-5 text-purple-400" />
+            <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider">AI Probability</p>
+          </div>
+          <p className="text-3xl font-display font-bold text-white">{Math.round(avgAI)}%</p>
+          <p className="text-xs text-zinc-500 mt-1">Likelihood of synthetic content</p>
+        </div>
+        <div className="glass-card p-6 border-red-500/20">
+          <div className="flex items-center gap-3 mb-2">
+            <AlertCircle className="w-5 h-5 text-red-400" />
+            <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Misinformation Rate</p>
+          </div>
+          <p className="text-3xl font-display font-bold text-white">{Math.round((falseClaims / totalClaims) * 100) || 0}%</p>
+          <p className="text-xs text-zinc-500 mt-1">{falseClaims} false claims detected</p>
+        </div>
       </div>
-      <div className="glass-card p-6 border-purple-500/20">
-        <div className="flex items-center gap-3 mb-2">
-          <Zap className="w-5 h-5 text-purple-400" />
-          <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider">AI Probability</p>
+
+      <div className="glass-card p-6 border-blue-500/20 relative overflow-hidden">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <Sparkles className="w-5 h-5 text-blue-400" />
+            <h3 className="font-bold text-white">AI History Analysis</h3>
+          </div>
+          {!aiInsight && !isGenerating && (
+            <button 
+              onClick={generateInsight} 
+              className="text-xs px-3 py-1.5 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30 transition-all font-medium"
+            >
+              Generate Insight
+            </button>
+          )}
         </div>
-        <p className="text-3xl font-display font-bold text-white">{Math.round(avgAI)}%</p>
-        <p className="text-xs text-zinc-500 mt-1">Likelihood of synthetic content</p>
-      </div>
-      <div className="glass-card p-6 border-red-500/20">
-        <div className="flex items-center gap-3 mb-2">
-          <AlertCircle className="w-5 h-5 text-red-400" />
-          <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Misinformation Rate</p>
-        </div>
-        <p className="text-3xl font-display font-bold text-white">{Math.round((falseClaims / totalClaims) * 100) || 0}%</p>
-        <p className="text-xs text-zinc-500 mt-1">{falseClaims} false claims detected</p>
+        
+        {isGenerating ? (
+          <div className="flex items-center gap-3 text-zinc-400 text-sm">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Analyzing your verification patterns...
+          </div>
+        ) : aiInsight ? (
+          <p className="text-sm text-zinc-300 leading-relaxed">{aiInsight}</p>
+        ) : (
+          <p className="text-sm text-zinc-500">Generate a personalized AI analysis of your fact-checking habits based on your history.</p>
+        )}
       </div>
     </div>
   );
